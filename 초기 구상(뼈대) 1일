@@ -1,0 +1,390 @@
+Web VPython 3.2
+
+from vpython import *
+import random
+
+# 1. 태양계 천체 및 초기 위치 계산
+R_EARTH = 12.0
+earth_orbit_radius = 400.0
+earth_angle = 0.0
+earth_x = earth_orbit_radius * cos(earth_angle)
+earth_z = earth_orbit_radius * sin(earth_angle)
+
+# 캔버스 설정
+scene = canvas(
+    title="우주 공학 AI 시뮬레이션", 
+    width=920, 
+    height=600, 
+    center=vector(earth_x, 12, earth_z),
+    background=vector(0.02, 0.02, 0.05)
+)
+
+scene.user_rotate = True
+scene.user_tozoom = True
+scene.range = 15
+
+# 배경 별 생성
+stars = []
+for _ in range(500):
+    pos_x = random.uniform(-2000, 2000)
+    pos_y = random.uniform(-1000, 1000)
+    pos_z = random.uniform(-2000, 2000)
+    s = sphere(pos=vector(pos_x, pos_y, pos_z), radius=random.uniform(0.6, 1.8), color=color.white, emissive=True)
+    stars.append(s)
+
+# 2. 우측 패널
+scene.caption = """
+<div style="float: right; width: 410px; margin-top: -610px; margin-right: 5px; font-family: sans-serif; display: flex; flex-direction: column; gap: 10px;">
+    
+    <!-- 대시보드 -->
+    <div id="dash_panel" style="background: white; color: black; padding: 22px; border-radius: 6px; border: 2px solid #bbb; font-size: 15px; line-height: 1.6;">
+        <b style="font-size: 18px; color: #111;">[ 우주 공학 AI 대시보드 ]</b><br>
+        • 위성 상태: <span id="txt_stage">대기 중</span><br>
+        • 고도: <span id="txt_alt">0.0</span> km<br>
+        • 잔여 연료: <span id="txt_fuel">8000.0</span> kg<br>
+        • 시간 배속: <span id="txt_timescale" style="color: #0056b3; font-weight: bold;">1.0</span>x<br>
+        • 카메라 고정: <span id="txt_lock" style="color: #28a745; font-weight: bold;">ON (로켓 추적)</span>
+    </div>
+    
+    <!-- 시스템 정보 및 제어판 -->
+    <div style="display: flex; gap: 10px;">
+        <div style="flex: 1; background: #e6f2ff; color: black; padding: 12px; border-radius: 5px; font-size: 12px; line-height: 1.4;">
+            <b>[ 조작 단축키 ]</b><br>
+            - <b style="color: #0056b3;">[ WASD ]</b> 줌 연동 속도 + 미세 관성<br>
+            - <b style="color: #0056b3;">[ C 키 유지 ]</b> 이동 속도 부스터 (2.5배)<br>
+            - <b style="color: #0056b3;">[ [ / ] 키 ]</b> 시간 배속 감소 / 증가<br>
+            - <b style="color: #0056b3;">[ Y 키 ]</b> 화면 고정 토글 (로켓 추적)<br>
+            - <b style="color: #d9534f;">[ 엔터 (Enter) ]</b> 로켓 발사
+        </div>
+        <div style="flex: 1; background: #f0f0f0; color: black; padding: 12px; border-radius: 5px; font-size: 12px; line-height: 1.4;">
+            <b>[ 제어판 ]</b><br>
+            - 상태: <span id="txt_status">정지 중</span>
+        </div>
+    </div>
+
+    <!-- 카메라 조작법 설명창 -->
+    <div style="background: #eef2f7; color: black; padding: 14px; border-radius: 5px; border: 1px solid #b0c4de; font-size: 12px; line-height: 1.5;">
+        <b>[ 카메라 조작법 ]</b><br>
+        - <b>3D 회전:</b> 마우스 우클릭 + 드래그<br>
+        - <b>화면 이동:</b> WASD / 스페이스 / Shift<br>
+        - <b>줌 인/아웃:</b> 마우스 휠 스크롤 (줌할수록 속도 비례 감소)
+    </div>
+    
+</div>
+"""
+
+# 3. 천체 및 대기 비율 설정
+ATMOSPHERE_RATIO = 100.0 / 6371.0
+R_ATMOSPHERE = R_EARTH * (1.0 + ATMOSPHERE_RATIO)
+
+sun = sphere(pos=vector(0, 0, 0), radius=45, color=vector(1, 0.6, 0.1), emissive=True)
+
+# 지구 공전 궤도 (지구를 따라 그려지는 반투명 흰색 선)
+earth_orbit_curve = curve(color=vector(1, 1, 1), opacity=0.3, radius=0.4)
+earth_trail_points = []
+
+earth_speed = 0.0005
+
+try:
+    earth = sphere(pos=vector(earth_x, 0, earth_z), radius=R_EARTH, texture=textures.earth)
+except:
+    earth = sphere(pos=vector(earth_x, 0, earth_z), radius=R_EARTH, color=vector(0.1, 0.4, 0.9))
+
+earth_atmosphere = sphere(pos=vector(earth_x, 0, earth_z), radius=R_ATMOSPHERE, color=vector(0.2, 0.6, 1.0), opacity=0.25)
+
+# 지구 자전축 (23.5도 기울어진 반투명 초록색 선)
+tilt_angle = radians(23.5)
+axis_len = R_EARTH * 2.8
+earth_axis_dir = vector(0, cos(tilt_angle), sin(tilt_angle))
+
+earth_axis = cylinder(
+    pos=earth.pos - earth_axis_dir * (axis_len / 2), 
+    axis=earth_axis_dir * axis_len, 
+    radius=0.12, 
+    color=vector(0.2, 0.9, 0.2), 
+    opacity=0.4, 
+    emissive=True
+)
+
+moon_distance = 55.0
+moon_angle = 0.0
+moon = sphere(pos=earth.pos + vector(moon_distance, 0, 0), radius=R_EARTH * 0.27, color=vector(0.7, 0.7, 0.7))
+
+# 로켓 모델 복합체
+rocket_body = cylinder(pos=earth.pos + vector(0, R_EARTH, 0), axis=vector(0, 0.12, 0), radius=0.03, color=vector(0.9, 0.9, 0.9))
+rocket_nose = cone(pos=earth.pos + vector(0, R_EARTH + 0.12, 0), axis=vector(0, 0.04, 0), radius=0.03, color=vector(0.8, 0.1, 0.1), emissive=True)
+rocket_fin1 = box(pos=earth.pos + vector(0, R_EARTH + 0.02, 0), size=vector(0.08, 0.04, 0.005), color=vector(0.2, 0.2, 0.2))
+rocket_fin2 = box(pos=earth.pos + vector(0, R_EARTH + 0.02, 0), size=vector(0.005, 0.04, 0.08), color=vector(0.2, 0.2, 0.2))
+
+flame = cone(pos=earth.pos + vector(0, R_EARTH, 0), axis=vector(0, -0.08, 0), radius=0.025, color=vector(1, 0.3, 0), visible=False, emissive=True)
+guide_arrow = arrow(pos=rocket_body.pos + vector(0, 0.6, 0), axis=vector(0, -0.4, 0), color=color.red, emissive=True)
+
+# 로켓 비행 궤적 (빨간색 점선/점들)
+trajectory_dots = []
+
+# 4. 물리 및 제어 변수
+G_MU = 140.0       
+fuel = 8000.0    
+velocity = vector(0, 0, 0)
+launched = False
+launch_time_counter = 0.0  
+camera_locked = True  
+time_scale = 1.0  # 시간 배속 변수
+
+manual_center_offset = earth.pos + vector(0, R_EARTH, 0)
+cam_velocity = vector(0, 0, 0)
+
+keys_pressed = {'w': False, 's': False, 'a': False, 'd': False, 'space': False, 'shift': False, 'c': False}
+
+def key_down(evt):
+    global launched, velocity, camera_locked, manual_center_offset, launch_time_counter, time_scale
+    k = evt.key
+    
+    if (k == '\n' or k == 'Enter' or k == 'enter') and not launched:
+        launched = True
+        launch_time_counter = 0.0
+        earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+        earth_rot_speed = 0.0007
+        init_vx = -earth_rot_speed * R_EARTH
+        velocity = earth_orbital_v + vector(init_vx, 0.02, 0)  
+    elif k == 'y' or k == 'Y':
+        camera_locked = not camera_locked
+        if not camera_locked:
+            manual_center_offset = vector(scene.center.x, scene.center.y, scene.center.z)
+            cam_velocity = vector(0, 0, 0)
+    elif k == '[':
+        time_scale = max(0.5, time_scale - 0.5) if time_scale <= 5.0 else max(5.0, time_scale - 5.0)
+    elif k == ']':
+        time_scale = min(50.0, time_scale + 0.5) if time_scale < 5.0 else min(50.0, time_scale + 5.0)
+    elif k in ['w', 'W', 's', 'S', 'a', 'A', 'd', 'D', 'c', 'C']:
+        if camera_locked and k.lower() != 'c':
+            camera_locked = False
+            manual_center_offset = vector(scene.center.x, scene.center.y, scene.center.z)
+            cam_velocity = vector(0, 0, 0)
+        k_lower = k.lower()
+        if k_lower in keys_pressed:
+            keys_pressed[k_lower] = True
+    elif k == ' ':
+        if camera_locked:
+            camera_locked = False
+            manual_center_offset = vector(scene.center.x, scene.center.y, scene.center.z)
+            cam_velocity = vector(0, 0, 0)
+        keys_pressed['space'] = True
+    elif k in ['shift', 'Shift', 'lshift', 'rshift']:
+        if camera_locked:
+            camera_locked = False
+            manual_center_offset = vector(scene.center.x, scene.center.y, scene.center.z)
+            cam_velocity = vector(0, 0, 0)
+        keys_pressed['shift'] = True
+
+def key_up(evt):
+    k = evt.key
+    k_lower = k.lower()
+    if k_lower in keys_pressed:
+        keys_pressed[k_lower] = False
+    elif k == ' ':
+        keys_pressed['space'] = False
+    elif k in ['shift', 'Shift', 'lshift', 'rshift']:
+        keys_pressed['shift'] = False
+
+scene.bind('keydown', key_down)
+scene.bind('keyup', key_up)
+
+def update_rocket_pose(pos, axis_dir, scale_factor=1.0):
+    rocket_body.pos = pos
+    rocket_body.axis = axis_dir * (0.12 * scale_factor)
+    rocket_body.radius = 0.03 * scale_factor
+    
+    nose_offset = pos + axis_dir * (0.12 * scale_factor)
+    rocket_nose.pos = nose_offset
+    rocket_nose.axis = axis_dir * (0.04 * scale_factor)
+    rocket_nose.radius = 0.03 * scale_factor
+    
+    fin_pos = pos + axis_dir * (0.02 * scale_factor)
+    rocket_fin1.pos = fin_pos
+    rocket_fin1.size = vector(0.08 * scale_factor, 0.04 * scale_factor, 0.005 * scale_factor)
+    rocket_fin2.pos = fin_pos
+    rocket_fin2.size = vector(0.005 * scale_factor, 0.04 * scale_factor, 0.08 * scale_factor)
+
+# 5. 메인 시뮬레이션 루프
+base_dt = 0.05
+moon_angle_speed = 0.002
+trail_timer = 0
+earth_trail_timer = 0
+
+while True:
+    rate(60)
+    
+    dt = base_dt * time_scale
+    
+    earth_angle += earth_speed * time_scale
+    prev_earth_pos = earth.pos
+    earth.pos = vector(earth_orbit_radius * cos(earth_angle), 0, earth_orbit_radius * sin(earth_angle))
+    
+    # 자전축 위치 동기화
+    earth_axis.pos = earth.pos - earth_axis_dir * (axis_len / 2)
+    
+    # 지구 공전 궤도 트레일 업데이트
+    earth_trail_timer += 1
+    if earth_trail_timer % max(1, int(3 / max(1.0, time_scale * 0.2))) == 0:
+        earth_trail_points.append(earth.pos)
+        if len(earth_trail_points) > 400:
+            earth_trail_points.pop(0)
+            
+    if len(earth_trail_points) >= 2:
+        earth_orbit_curve.clear()
+        for p in earth_trail_points:
+            earth_orbit_curve.append(pos=p)
+
+    earth_atmosphere.pos = earth.pos
+    
+    earth.rotate(angle=0.0007 * time_scale, axis=earth_axis_dir, origin=earth.pos)
+    earth_atmosphere.rotate(angle=0.0005 * time_scale, axis=earth_axis_dir, origin=earth.pos)
+    sun.rotate(angle=0.0001 * time_scale, axis=vector(0, 1, 0))
+    
+    moon_angle += moon_angle_speed * time_scale
+    moon.pos = earth.pos + vector(moon_distance * cos(moon_angle), 0, moon_distance * sin(moon_angle))
+    
+    rocket_scale = max(1.0, scene.range / 15.0)
+    
+    if not launched:
+        update_rocket_pose(earth.pos + vector(0, R_EARTH, 0), vector(0, 1, 0), rocket_scale)
+        flame.pos = rocket_body.pos
+        
+        r_scale = scene.range
+        guide_arrow.pos = rocket_body.pos + vector(0, r_scale * 0.12, 0)
+        guide_arrow.axis = vector(0, -r_scale * 0.07, 0)
+        guide_arrow.shaftwidth = r_scale * 0.004
+        guide_arrow.headwidth = r_scale * 0.012
+        guide_arrow.headlength = r_scale * 0.02
+        guide_arrow.opacity = 1.0
+        
+        if scene.range < 8:
+            guide_arrow.visible = False
+        else:
+            guide_arrow.visible = True
+    else:
+        launch_time_counter += dt
+        
+        if fuel > 0:
+            fuel -= 35.0 * time_scale
+            if fuel < 0: fuel = 0
+            
+            flame.visible = True
+            flame.pos = rocket_body.pos
+            flame.axis = -rocket_body.axis.norm() * (0.08 * rocket_scale)
+            flame.radius = 0.025 * rocket_scale
+            
+            r_vec = rocket_body.pos - earth.pos
+            r_mag = mag(r_vec)
+            gravity_accel = -r_vec.norm() * (G_MU / (r_mag ** 2))
+            
+            accel_ramp = min(1.0, launch_time_counter / 2.5)
+            thrust_accel = vector(0, 0.65 * accel_ramp, 0) if fuel > 0 else vector(0, 0, 0)
+            
+            accel = thrust_accel + gravity_accel
+            velocity += accel * dt
+            rocket_body.pos += velocity * dt
+            
+            if mag(velocity) > 0.0001:
+                update_rocket_pose(rocket_body.pos, velocity.norm(), rocket_scale)
+                
+        else:
+            flame.visible = False
+            r_vec = rocket_body.pos - earth.pos
+            r_mag = mag(r_vec)
+            gravity_accel = -r_vec.norm() * (G_MU / (r_mag ** 2))
+            
+            velocity += gravity_accel * dt
+            rocket_body.pos += velocity * dt
+            if mag(velocity) > 0.0001:
+                update_rocket_pose(rocket_body.pos, velocity.norm(), rocket_scale)
+
+        # 로켓 궤적 (빨간색 점선 효과) 생성
+        trail_timer += 1
+        if trail_timer % 4 == 0 and launched:
+            dot = sphere(pos=rocket_body.pos, radius=0.04 * rocket_scale, color=color.red, emissive=True)
+            trajectory_dots.append(dot)
+            if len(trajectory_dots) > 150:
+                old_dot = trajectory_dots.pop(0)
+                old_dot.visible = False
+
+        r_scale = scene.range
+        guide_arrow.pos = rocket_body.pos + vector(0, r_scale * 0.12, 0)
+        guide_arrow.axis = vector(0, -r_scale * 0.07, 0)
+        guide_arrow.shaftwidth = r_scale * 0.004
+        guide_arrow.headwidth = r_scale * 0.012
+        guide_arrow.headlength = r_scale * 0.02
+        
+        if launch_time_counter <= 1.7:
+            guide_arrow.visible = True
+            guide_arrow.opacity = 1.0
+        elif launch_time_counter < 2.3:
+            fade_progress = (launch_time_counter - 1.7) / 0.6
+            guide_arrow.opacity = max(0.0, 1.0 - fade_progress)
+            guide_arrow.visible = True
+        else:
+            guide_arrow.visible = False
+
+    # 시점 기준 이동 벡터 계산
+    fwd_hz = vector(scene.forward.x, 0, scene.forward.z)
+    if mag(fwd_hz) > 0.001:
+        cam_fwd = norm(fwd_hz)
+    else:
+        cam_fwd = vector(0, 0, -1)
+    cam_right = cross(cam_fwd, vector(0, 1, 0))
+
+    move_dir = vector(0, 0, 0)
+    if keys_pressed['w']: move_dir += cam_fwd
+    if keys_pressed['s']: move_dir -= cam_fwd
+    if keys_pressed['d']: move_dir += cam_right
+    if keys_pressed['a']: move_dir -= cam_right
+    if keys_pressed['space']: move_dir += vector(0, 1, 0)
+    if keys_pressed['shift']: move_dir -= vector(0, 1, 0)
+
+    if mag(move_dir) > 0:
+        move_dir = norm(move_dir)
+        base_speed = (scene.range ** 1.15) * 0.014
+        multiplier = 2.5 if keys_pressed['c'] else 1.0
+        move_speed = base_speed * multiplier
+        target_cam_vel = move_dir * move_speed
+    else:
+        target_cam_vel = vector(0, 0, 0)
+
+    cam_velocity += (target_cam_vel - cam_velocity) * 0.5
+    manual_center_offset += cam_velocity
+
+    if camera_locked:
+        target_center = rocket_body.pos
+    else:
+        target_center = manual_center_offset
+
+    scene.center += (target_center - scene.center) * 0.5
+
+    r_center = mag(rocket_body.pos - earth.pos)
+    altitude = max(0.0, (r_center - R_EARTH) * (6371.0 / R_EARTH))
+    
+    stage_str = "대기 중"
+    status_str = "정지 중"
+    if launched:
+        if r_center < R_ATMOSPHERE:
+            stage_str = "대기권 통과 중"
+        else:
+            stage_str = "우주 공간 진입" if fuel > 0 else "관성 비행"
+        status_str = "비행 중"
+        
+    lock_str = "ON (로켓 추적)" if camera_locked else "OFF (자유 탐색)"
+    lock_color = "#28a745" if camera_locked else "#d9534f"
+    
+    scene.append_to_caption(f"""
+    <script>
+        document.getElementById('txt_stage').innerText = "{stage_str}";
+        document.getElementById('txt_alt').innerText = "{altitude:.1f}";
+        document.getElementById('txt_fuel').innerText = "{fuel:.1f}";
+        document.getElementById('txt_timescale').innerText = "{time_scale:.1f}";
+        document.getElementById('txt_status').innerText = "{status_str}";
+        var lockElem = document.getElementById('txt_lock');
+        lockElem.innerText = "{lock_str}";
+        lockElem.style.color = "{lock_color}";
+    </script>
+    """)
