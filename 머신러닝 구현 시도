@@ -1,0 +1,443 @@
+Web VPython 3.2
+
+from vpython import *
+import random
+
+# 1. 물리 스케일 상수
+R_EARTH = 12.0
+ATMOSPHERE_RATIO = 100.0 / 6371.0
+R_ATMOSPHERE = R_EARTH * (1.0 + ATMOSPHERE_RATIO)
+
+G_MU_EARTH = 140.0
+G_MU_SUN = 16.0
+G_MU_MOON = 4.5  
+
+DRY_MASS = 1500.0
+MAX_FUEL = 4000.0  
+ENGINE_FORCE = 8500.0  # TWR 부족 문제 해결을 위해 추력 상향
+
+earth_orbit_radius = 600.0
+earth_angle = 0.0
+earth_x = earth_orbit_radius * cos(earth_angle)
+earth_z = earth_orbit_radius * sin(earth_angle)
+
+scene = canvas(
+    title="우주 공학 AI 시뮬레이션 (궤도 최적화 개선)", 
+    width=920, 
+    height=600, 
+    center=vector(earth_x, 12, earth_z), 
+    background=vector(0.02, 0.02, 0.05)
+)
+scene.user_rotate = True
+scene.user_tozoom = True
+scene.range = 22
+
+stars = []
+for _ in range(1200):
+    s = sphere(pos=vector(random.uniform(-2000, 2000), random.uniform(-1000, 1000), random.uniform(-2000, 2000)), radius=random.uniform(0.4, 1.5), color=color.white, emissive=True)
+    stars.append(s)
+
+# 2. UI 패널
+scene.caption = """
+<div style="float: right; width: 410px; margin-top: -610px; margin-right: 5px; font-family: sans-serif; display: flex; flex-direction: column; gap: 10px;">
+    <div id="dash_panel" style="background: white; color: black; padding: 22px; border-radius: 6px; border: 2px solid #bbb; font-size: 15px; line-height: 1.6;">
+        <b style="font-size: 18px; color: #111;">[ 코어-파인 최적화 대시보드 ]</b><br>
+        • 세대(Generation): <span id="txt_gen">1</span>세대 | 에피소드: <span id="txt_episode">1</span>회차<br>
+        • 위성 상태: <span id="txt_stage">대기 중</span><br>
+        • 고도: <span id="txt_alt">0.0</span> km<br>
+        • 속도: <span id="txt_vel">0.0</span> km/s<br>
+        • 잔여 연료: <span id="txt_fuel">4000.0</span> kg<br>
+        • 현재 유전자 (턴 시작고도(km) / 기울기): <span id="txt_gene">--</span><br>
+        • 최고 피트니스(점수): <span id="txt_fitness">0.0</span><br>
+        • 시간 배속: <span id="txt_timescale" style="color: #0056b3; font-weight: bold;">1.0</span>x<br>
+        • 카메라 고정: <span id="txt_lock" style="color: #28a745; font-weight: bold;">ON (로켓 추적)</span>
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <div style="flex: 1; background: #e6f2ff; color: black; padding: 12px; border-radius: 5px; font-size: 12px; line-height: 1.4;">
+            <b>[ 조작 단축키 ]</b><br>
+            - <b style="color: #0056b3;">[ 엔터 (Enter) ]</b> 수동 발사/진행<br>
+            - <b style="color: #d9534f;">[ R 키 ]</b> 전체 리셋<br>
+            - <b style="color: #0056b3;">[ WASD / Space ]</b> 화면 이동<br>
+            - <b style="color: #0056b3;">[ [ / ] 키 ]</b> 시간 배속 조절<br>
+            - <b style="color: #0056b3;">[ Y 키 ]</b> 화면 고정 토글
+        </div>
+    </div>
+</div>
+"""
+
+# 3. 천체 생성
+sun = sphere(pos=vector(0, 0, 0), radius=67.5, color=vector(1, 0.6, 0.1), emissive=True)
+
+earth_orbit_curve = curve(color=vector(1, 1, 1), opacity=0.15, radius=0.4)
+for a_step in range(0, 361, 3):
+    rad = radians(a_step)
+    earth_orbit_curve.append(pos=vector(earth_orbit_radius * cos(rad), 0, earth_orbit_radius * sin(rad)))
+
+earth_speed = 0.000272
+earth_rot_speed = 0.0007
+try:
+    earth = sphere(pos=vector(earth_x, 0, earth_z), radius=R_EARTH, texture=textures.earth)
+except:
+    earth = sphere(pos=vector(earth_x, 0, earth_z), radius=R_EARTH, color=vector(0.1, 0.4, 0.9))
+
+earth_atmosphere = sphere(pos=vector(earth_x, 0, earth_z), radius=R_ATMOSPHERE, color=vector(0.2, 0.6, 1.0), opacity=0.25)
+
+tilt_angle = radians(23.5)
+axis_len = R_EARTH * 2.8
+earth_axis_dir = vector(0, cos(tilt_angle), sin(tilt_angle))
+earth_axis = cylinder(pos=earth.pos - earth_axis_dir * (axis_len / 2), axis=earth_axis_dir * axis_len, radius=0.12, color=vector(0.2, 0.9, 0.2), opacity=0.4, emissive=True)
+
+moon_distance = 135.0
+moon_angle = 0.0
+moon_angle_speed = 0.000816
+moon = sphere(pos=earth.pos + vector(moon_distance, 0, 0), radius=R_EARTH * 0.27, color=vector(0.7, 0.7, 0.7))
+
+# 4. 로켓 모델
+rocket_body = cylinder(pos=earth.pos + vector(0, R_EARTH, 0), axis=vector(0, 0.12, 0), radius=0.03, color=vector(0.9, 0.9, 0.9))
+rocket_nose = cone(pos=earth.pos + vector(0, R_EARTH + 0.12, 0), axis=vector(0, 0.04, 0), radius=0.03, color=vector(0.8, 0.1, 0.1), emissive=True)
+flame = cone(pos=earth.pos + vector(0, R_EARTH, 0), axis=vector(0, -0.08, 0), radius=0.025, color=vector(1, 0.3, 0), visible=False, emissive=True)
+trajectory_dots = []
+
+# 5. 최적화 제어 변수
+generation = 1
+episode_count = 1
+fuel = MAX_FUEL    
+velocity = vector(0, 0, 0)
+launched = False  
+launch_time_counter = 0.0  
+camera_locked = True  
+time_scale = 1.0  
+manual_center_offset = earth.pos + vector(0, R_EARTH, 0)
+cam_velocity = vector(0, 0, 0)
+keys_pressed = {'w': False, 's': False, 'a': False, 'd': False, 'space': False, 'shift': False}
+
+current_gene = [random.uniform(5.0, 40.0), random.uniform(0.5, 3.0)]
+best_gene = list(current_gene)
+best_fitness = -999999.0
+episode_fitness = 0.0
+
+def update_rocket_pose(pos, axis_dir, scale_factor=1.0):
+    rocket_body.pos = pos
+    rocket_body.axis = axis_dir * (0.12 * scale_factor)
+    rocket_body.radius = 0.03 * scale_factor
+    rocket_nose.pos = pos + axis_dir * (0.12 * scale_factor)
+    rocket_nose.axis = axis_dir * (0.04 * scale_factor)
+    rocket_nose.radius = 0.03 * scale_factor
+
+def evolve_genes():
+    global current_gene, best_gene, generation, episode_count
+    generation += 1
+    
+    # 30세대 이후 탐색 폭이 완전히 죽지 않도록 하한선(0.15) 유지
+    p = generation - 1
+    decay = 0.92 ** p
+    step_scale = max(0.15, 8.0 * decay)
+    
+    current_gene = [
+        max(2.0, best_gene[0] + random.uniform(-15.0, 15.0) * step_scale),
+        max(0.1, best_gene[1] + random.uniform(-1.0, 1.0) * step_scale)
+    ]
+    episode_count = 1
+
+def reset_simulation(fitness):
+    global launched, fuel, velocity, launch_time_counter, trajectory_dots, episode_count, earth_angle, moon_angle, earth_x, earth_z, best_fitness, best_gene, episode_fitness
+    
+    episode_fitness = fitness
+    if episode_fitness > best_fitness:
+        best_fitness = episode_fitness
+        best_gene = list(current_gene)
+        
+    if episode_count >= 3:  
+        evolve_genes()
+    else:
+        episode_count += 1
+        p = generation - 1
+        decay = 0.92 ** p
+        step_scale = max(0.15, 4.0 * decay)
+        current_gene[0] = max(2.0, best_gene[0] + random.uniform(-5.0, 5.0) * step_scale)
+        current_gene[1] = max(0.1, best_gene[1] + random.uniform(-0.3, 0.3) * step_scale)
+
+    launched = True  
+    fuel = MAX_FUEL    
+    launch_time_counter = 0.0
+    
+    earth_angle = 0.0
+    earth_x = earth_orbit_radius * cos(earth_angle)
+    earth_z = earth_orbit_radius * sin(earth_angle)
+    earth.pos = vector(earth_x, 0, earth_z)
+    earth_axis.pos = earth.pos - earth_axis_dir * (axis_len / 2)
+    earth_atmosphere.pos = earth.pos
+    
+    moon_angle = 0.0
+    moon.pos = earth.pos + vector(moon_distance * cos(moon_angle), 0, moon_distance * sin(moon_angle))
+    
+    for dot in trajectory_dots:
+        dot.visible = False
+    trajectory_dots = []
+    
+    launch_pad_offset = vector(0, R_EARTH, 0)
+    rocket_scale = max(1.0, scene.range / 22.0)
+    update_rocket_pose(earth.pos + launch_pad_offset, vector(0, 1, 0), rocket_scale)
+    flame.visible = False
+    
+    earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+    surface_v = cross(earth_axis_dir * earth_rot_speed, rocket_body.pos - earth.pos)
+    velocity = earth_orbital_v + surface_v
+
+def full_reset():
+    global launched, fuel, velocity, launch_time_counter, trajectory_dots, episode_count, generation, current_gene, best_gene, best_fitness
+    generation = 1
+    episode_count = 1
+    current_gene = [random.uniform(5.0, 40.0), random.uniform(0.5, 3.0)]
+    best_gene = list(current_gene)
+    best_fitness = -999999.0
+    
+    launched = False  
+    fuel = MAX_FUEL
+    launch_time_counter = 0.0
+    
+    earth_angle = 0.0
+    earth_x = earth_orbit_radius * cos(earth_angle)
+    earth_z = earth_orbit_radius * sin(earth_angle)
+    earth.pos = vector(earth_x, 0, earth_z)
+    earth_axis.pos = earth.pos - earth_axis_dir * (axis_len / 2)
+    earth_atmosphere.pos = earth.pos
+    
+    moon_angle = 0.0
+    moon.pos = earth.pos + vector(moon_distance * cos(moon_angle), 0, moon_distance * sin(moon_angle))
+    
+    for dot in trajectory_dots:
+        dot.visible = False
+    trajectory_dots = []
+    
+    launch_pad_offset = vector(0, R_EARTH, 0)
+    rocket_scale = max(1.0, scene.range / 22.0)
+    update_rocket_pose(earth.pos + launch_pad_offset, vector(0, 1, 0), rocket_scale)
+    flame.visible = False
+    
+    earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+    surface_v = cross(earth_axis_dir * earth_rot_speed, rocket_body.pos - earth.pos)
+    velocity = earth_orbital_v + surface_v
+
+def key_down(evt):
+    global launched, velocity, camera_locked, manual_center_offset, launch_time_counter, time_scale
+    if not evt or not hasattr(evt, 'key') or not evt.key:
+        return
+    
+    k = str(evt.key).lower()
+    if evt.key == ' ' or k == ' ': k = 'space'
+    elif 'shift' in k or getattr(evt, 'shift', False) or getattr(evt, 'shiftKey', False): k = 'shift'
+
+    if (evt.key == '\n' or evt.key == 'Enter') and not launched:
+        launched = True
+        launch_time_counter = 0.0
+        earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+        surface_v = cross(earth_axis_dir * earth_rot_speed, rocket_body.pos - earth.pos)
+        velocity = earth_orbital_v + surface_v
+    elif k == 'r':
+        full_reset()
+        for key in keys_pressed: keys_pressed[key] = False
+    elif k == 'y':
+        camera_locked = not camera_locked
+        if not camera_locked:
+            manual_center_offset = vector(scene.center.x, scene.center.y, scene.center.z)
+            cam_velocity = vector(0, 0, 0)
+    elif k == '[': time_scale = max(0.5, time_scale - 0.5)
+    elif k == ']': time_scale = min(100.0, time_scale + 0.5)
+    elif k in keys_pressed: keys_pressed[k] = True
+
+def key_up(evt):
+    if not evt or not hasattr(evt, 'key') or not evt.key:
+        for key in keys_pressed: keys_pressed[key] = False
+        return
+    k = str(evt.key).lower()
+    if evt.key == ' ' or k == ' ': k = 'space'
+    elif 'shift' in k or getattr(evt, 'shift', False) or getattr(evt, 'shiftKey', False): k = 'shift'
+    if k in keys_pressed: keys_pressed[k] = False
+    else:
+        for key in keys_pressed:
+            keys_pressed[key] = False
+
+scene.bind('keydown', key_down)
+scene.bind('keyup', key_up)
+
+earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+surface_v = cross(earth_axis_dir * earth_rot_speed, rocket_body.pos - earth.pos)
+velocity = earth_orbital_v + surface_v
+
+base_dt = 0.05
+trail_timer = 0
+altitude = 0.0
+max_reached_altitude = 0.0
+
+while True:
+    rate(60)
+    dt = base_dt * time_scale
+    
+    earth_angle += earth_speed * time_scale
+    earth.pos = vector(earth_orbit_radius * cos(earth_angle), 0, earth_orbit_radius * sin(earth_angle))
+    earth_axis.pos = earth.pos - earth_axis_dir * (axis_len / 2)
+    earth_atmosphere.pos = earth.pos
+    earth.rotate(angle=earth_rot_speed * time_scale, axis=earth_axis_dir, origin=earth.pos)
+    
+    moon_angle += moon_angle_speed * time_scale
+    moon.pos = earth.pos + vector(moon_distance * cos(moon_angle), 0, moon_distance * sin(moon_angle))
+    
+    rocket_scale = max(1.0, scene.range / 22.0)
+    
+    if not launched:
+        launch_pad_offset = vector(0, R_EARTH, 0)
+        update_rocket_pose(earth.pos + launch_pad_offset, vector(0, 1, 0), rocket_scale)
+        flame.pos = rocket_body.pos
+        earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+        surface_v = cross(earth_axis_dir * earth_rot_speed, rocket_body.pos - earth.pos)
+        velocity = earth_orbital_v + surface_v
+        max_reached_altitude = 0.0
+    else:
+        launch_time_counter += dt
+        
+        r_earth_vec = rocket_body.pos - earth.pos
+        r_sun_vec = rocket_body.pos - sun.pos
+        r_moon_vec = rocket_body.pos - moon.pos
+        
+        g_earth = -norm(r_earth_vec) * (G_MU_EARTH / (mag(r_earth_vec)**2))
+        g_sun = -norm(r_sun_vec) * (G_MU_SUN / (mag(r_sun_vec)**2))
+        g_moon = -norm(r_moon_vec) * (G_MU_MOON / (mag(r_moon_vec)**2))
+        total_gravity = g_earth + g_sun + g_moon
+        
+        alt_units = mag(r_earth_vec) - R_EARTH
+        altitude = max(0.0, alt_units * (6371.0 / R_EARTH))
+        
+        drag_accel = vector(0, 0, 0)
+        
+        earth_orbital_v = vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle))
+        atm_rot_v = cross(earth_axis_dir * earth_rot_speed, r_earth_vec)
+        v_rel = velocity - (earth_orbital_v + atm_rot_v)
+        
+        if alt_units < (R_ATMOSPHERE - R_EARTH):
+            rho = exp(-alt_units / 0.5)
+            drag_accel = -0.015 * rho * mag(v_rel) * v_rel
+            
+        thrust_accel = vector(0, 0, 0)
+        if fuel > 0:
+            fuel -= 600.0 * dt
+            if fuel < 0: fuel = 0
+            
+            current_mass = DRY_MASS + fuel
+            accel_ramp = min(1.0, launch_time_counter / 2.0)
+            
+            up_dir = norm(r_earth_vec)
+            east_dir = norm(cross(earth_axis_dir, up_dir)) 
+            
+            turn_start_alt = current_gene[0]
+            sensitivity = current_gene[1]
+            pitch_factor = min(1.0, max(0.0, (altitude - turn_start_alt) / 20.0) * sensitivity)
+            
+            thrust_dir = norm(up_dir * (1.0 - pitch_factor) + east_dir * pitch_factor)
+            thrust_accel = thrust_dir * (ENGINE_FORCE / current_mass) * accel_ramp
+            
+            flame.visible = True
+            flame.pos = rocket_body.pos
+            flame.axis = -thrust_dir * (0.08 * rocket_scale)
+            flame.radius = 0.025 * rocket_scale
+        else:
+            flame.visible = False
+            
+        accel = total_gravity + drag_accel + thrust_accel
+        velocity += accel * dt
+        rocket_body.pos += velocity * dt
+        
+        current_axis = thrust_dir if fuel > 0 else norm(velocity)
+        if mag(velocity) > 0.0001:
+            update_rocket_pose(rocket_body.pos, current_axis, rocket_scale)
+
+        trail_timer += 1
+        if trail_timer % 4 == 0:
+            trajectory_dots.append(sphere(pos=rocket_body.pos, radius=0.04 * rocket_scale, color=color.red, emissive=True))
+
+    if camera_locked:
+        scene.center += (rocket_body.pos - scene.center) * 0.15
+    else:
+        fwd_hz = vector(scene.forward.x, 0, scene.forward.z)
+        cam_fwd = norm(fwd_hz) if mag(fwd_hz) > 0.001 else vector(0, 0, -1)
+        cam_right = cross(cam_fwd, vector(0, 1, 0))
+        move_dir = vector(0, 0, 0)
+        if keys_pressed['w']: move_dir += cam_fwd
+        if keys_pressed['s']: move_dir -= cam_fwd
+        if keys_pressed['d']: move_dir += cam_right
+        if keys_pressed['a']: move_dir -= cam_right
+        if keys_pressed['space']: move_dir += vector(0, 1, 0)
+        if keys_pressed['shift']: move_dir -= vector(0, 1, 0)
+        
+        target_vel = norm(move_dir) * ((scene.range ** 1.15) * 0.014) if mag(move_dir) > 0 else vector(0, 0, 0)
+        cam_velocity += (target_vel - cam_velocity) * 0.35
+        manual_center_offset += cam_velocity
+        scene.center += (manual_center_offset - scene.center) * 0.15
+
+    r_center = mag(rocket_body.pos - earth.pos) if launched else R_EARTH
+    altitude = max(0.0, (r_center - R_EARTH) * (6371.0 / R_EARTH))
+    if altitude > max_reached_altitude:
+        max_reached_altitude = altitude
+        
+    display_vel = mag(velocity) * 2.3
+    
+    stage_str = "대기 중"
+    if launched:
+        r_earth_dist = mag(rocket_body.pos - earth.pos)
+        v_rel_earth = velocity - (vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle)) + cross(earth_axis_dir * earth_rot_speed, r_earth_vec))
+        earth_orbital_energy = 0.5 * mag(v_rel_earth)**2 - (G_MU_EARTH / r_earth_dist)
+        
+        if r_earth_dist > 500.0 and earth_orbital_energy >= -0.05:
+            stage_str = "지구 중력권 이탈 (헬리오센트릭 진입)"
+        elif r_center < R_ATMOSPHERE: 
+            stage_str = "대기권 통과 중"
+        elif fuel > 0: 
+            stage_str = "AI 오토파일럿 가속 중"
+        else: 
+            stage_str = "관성 비행 중"
+            
+    if launched:
+        r_earth_dist = mag(rocket_body.pos - earth.pos)
+        r_moon_dist = mag(rocket_body.pos - moon.pos)
+        moon_radius = R_EARTH * 0.27
+
+        is_crashed = (fuel <= 0 and altitude < 5.0)
+        is_moon_crashed = (r_moon_dist <= moon_radius + 0.5)
+        
+        # 조기 리셋 방지를 위해 경계 범위를 2500.0으로 대폭 확장
+        is_out_of_bounds = (r_earth_dist > 2500.0 or r_earth_dist < 8.0)
+        
+        if is_crashed or is_moon_crashed or is_out_of_bounds:
+            v_rel_earth = velocity - (vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle)) + cross(earth_axis_dir * earth_rot_speed, r_earth_vec))
+            horizontal_speed = mag(v_rel_earth)
+            
+            # 궤도 속도(수평 성분)를 적극 반영하도록 피트니스 함수 수정
+            fitness = max_reached_altitude + (horizontal_speed * 150.0) + (fuel * 0.05)
+            if is_crashed: fitness -= 100.0
+            reset_simulation(fitness)
+        elif fuel <= 0 and altitude >= 200.0:
+            v_rel_earth = velocity - (vector(-earth_speed * earth_orbit_radius * sin(earth_angle), 0, earth_speed * earth_orbit_radius * cos(earth_angle)) + cross(earth_axis_dir * earth_rot_speed, r_earth_vec))
+            horizontal_speed = mag(v_rel_earth)
+            fitness = max_reached_altitude + 2000.0 + (horizontal_speed * 200.0) + (fuel * 0.2)
+            reset_simulation(fitness)
+        
+    lock_str = "ON (로켓 추적)" if camera_locked else "OFF (자유 탐색)"
+    lock_color = "#28a745" if camera_locked else "#d9534f"
+    gene_str = f"고도 {current_gene[0]:.1f}km / 계수 {current_gene[1]:.2f}"
+        #시발 좀 쳐 되라 뭘 해야하지?
+    scene.append_to_caption(f"""
+    <script>
+        document.getElementById('txt_gen').innerText = "{generation}";
+        document.getElementById('txt_episode').innerText = "{episode_count}";
+        document.getElementById('txt_stage').innerText = "{stage_str}";
+        document.getElementById('txt_alt').innerText = "{altitude:.1f}";
+        document.getElementById('txt_vel').innerText = "{display_vel:.1f}";
+        document.getElementById('txt_fuel').innerText = "{fuel:.1f}";
+        document.getElementById('txt_gene').innerText = "{gene_str}";
+        document.getElementById('txt_fitness').innerText = "{best_fitness:.1f}";
+        document.getElementById('txt_timescale').innerText = "{time_scale:.1f}";
+        var lockElem = document.getElementById('txt_lock');
+        lockElem.innerText = "{lock_str}";
+        lockElem.style.color = "{lock_color}";
+    </script>
+    """)
